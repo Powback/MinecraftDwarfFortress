@@ -1,0 +1,21 @@
+{
+  "name": "mdf-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MinecraftDwarfFortress bridge — DFHack <-> canonical event log <-> Minecraft",
+  "scripts": {
+    "dev": "nodemon --legacy-watch --watch src --watch proto --ext ts,proto,json --exec \"tsx src/index.ts\"",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "protobufjs": "^7.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "nodemon": "^3.1.9",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

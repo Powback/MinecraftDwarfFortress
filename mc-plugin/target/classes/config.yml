@@ -1,0 +1,7 @@
+# TCP port the bridge connects to.
+port: 8686
+# World the fort is rendered into (first world if blank).
+world: ""
+# Name of the world GENERATED from the received snapshot. Use a distinct name
+# (e.g. "earth") on a second server so it doesn't collide with the DF fort.
+generatedWorld: "dffort"

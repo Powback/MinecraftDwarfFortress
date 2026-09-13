@@ -1,0 +1,6 @@
+name: MdfReceiver
+version: 0.1.0
+main: com.mdf.MdfPlugin
+api-version: '1.21'
+description: Receives DF world state from the MinecraftDwarfFortress bridge and renders it.
+author: mdf

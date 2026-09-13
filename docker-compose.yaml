@@ -1,0 +1,121 @@
+# MinecraftDwarfFortress — Stage 0: DF container + bridge heartbeat.
+# `docker compose up` should end with the bridge printing a map size + unit count.
+#
+# Stage 1 adds the `mc` service (Paper + receiver plugin); left commented below.
+services:
+  df:
+    build: ./df
+    # DF/DFHack are x86_64-only binaries; on Apple Silicon the whole container
+    # must be amd64 so the x86_64 dynamic linker exists and Colima's Rosetta
+    # (--vz-rosetta) emulates it. Native-arm64 base => qemu can't find ld-linux.
+    platform: linux/amd64
+    # DFHack's launcher calls setarch to disable ASLR (personality syscall),
+    # which Docker's default seccomp profile blocks -> "Operation not permitted".
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - MODE=${MODE:-run}        # set MODE=embark for the one-time fort creation (VNC :5900)
+      - AUTO_LOAD=1
+      - TERM=dumb
+      # DFHack's interactive console reads stdin; with no TTY it hits EOF and
+      # shuts DF down, and WITH a bare docker TTY it blocks init. Disabling the
+      # console removes the stdin dependency entirely (RPC is unaffected).
+      - DFHACK_DISABLE_CONSOLE=1
+    volumes:
+      - ./saves:/opt/df/data/save   # your fort lives here; survives rebuilds
+      # Hot-edit boot logic + RPC config without rebuilding the big DF image.
+      # (single-file mounts so DFHack's other default configs stay intact)
+      - ./df/entrypoint.sh:/entrypoint.sh:ro
+      - ./df/dfhack-config/remote-server.json:/opt/df/dfhack-config/remote-server.json:ro
+    ports:
+      - "5000:5000"   # RemoteFortressReader RPC (also reachable as df:5000 in-network)
+      - "5900:5900"   # VNC, only used in MODE=embark
+      - "6080:6080"   # noVNC (browser embark), only used in MODE=embark
+    stop_grace_period: 30s
+
+  bridge:
+    build: ./bridge
+    depends_on:
+      - df
+    # Share DF's network namespace so DFHack sees the bridge as 127.0.0.1.
+    # DFHack's RemoteFortressReader forbids ALL RPC methods from non-localhost
+    # clients in this build; localhost is also required for the core RunLua/
+    # RunCommand write path in later stages. Reach DFHack at 127.0.0.1:5000.
+    network_mode: "service:df"
+    environment:
+      - DF_HOST=127.0.0.1
+      - DF_PORT=5000
+      - POLL_MS=3000
+    volumes:
+      - ./bridge/src:/app/src       # hot reload (nodemon --legacy-watch polling)
+      - ./bridge/proto:/app/proto
+      - ./data:/app/data            # event log will live here (later stages)
+
+  # --- Stage 1 ---
+  # Paper server via itzg image (auto-downloads Paper, accepts EULA). Our receiver
+  # plugin drops into ./mc/plugins. The bridge <-> plugin socket (:8686) arrives
+  # with the plugin; for now this just gets a Paper server you can connect to.
+  mc:
+    image: itzg/minecraft-server:latest
+    depends_on:
+      - bridge
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "1.21.4"
+      MEMORY: "3G"
+      ONLINE_MODE: "FALSE"     # dev: lets test clients/bots connect without auth
+      USE_AIKAR_FLAGS: "TRUE"
+      # DF owns the terrain (DESIGN §4): generate a VOID world so the fort is the
+      # only thing that exists — no competing vanilla landscape.
+      LEVEL_TYPE: "minecraft:flat"
+      GENERATOR_SETTINGS: '{"layers":[],"biome":"minecraft:the_void"}'
+      GENERATE_STRUCTURES: "FALSE"
+      MODE: "creative"         # fly around the fort; no falling in the void
+      FORCE_GAMEMODE: "TRUE"
+      SPAWN_PROTECTION: "0"
+      SPAWN_ANIMALS: "FALSE"
+      SPAWN_MONSTERS: "FALSE"  # DF is the sole source of creatures (DESIGN §5b)
+    ports:
+      - "25565:25565"          # players connect here
+      - "8686:8686"            # bridge <-> plugin socket (once the plugin exists)
+    volumes:
+      - ./mc/data:/data                # world + server files
+      - ./mc/plugins:/plugins          # our receiver plugin lands here
+    tty: true
+    stdin_open: true
+
+  # --- MinecraftEarth ---
+  # A SECOND, standalone Paper server that renders real-world / procedural Earth
+  # terrain. Uses the SAME mdf-receiver plugin (data-source-agnostic) but with
+  # generatedWorld=earth (see mc-earth/data/plugins/MdfReceiver/config.yml) so it
+  # never collides with the DF fort's 'dffort'. Independent ports, data dir, and
+  # plugin socket — does NOT touch mc/df/bridge or their world data.
+  # The earth sender (minecraftearth/send-earth.mjs) connects to the plugin
+  # socket (host :8687 -> container :8686) and streams a snapshot + spawn.
+  mc-earth:
+    image: itzg/minecraft-server:latest
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "1.21.4"
+      MEMORY: "3G"
+      ONLINE_MODE: "FALSE"     # dev: lets test clients/bots connect without auth
+      RCON_PASSWORD: "earth"   # rcon for verification (docker compose exec ... rcon-cli)
+      # VOID base world — the snapshot-generated 'earth' world is the only terrain.
+      LEVEL_TYPE: "minecraft:flat"
+      GENERATOR_SETTINGS: '{"layers":[],"biome":"minecraft:the_void"}'
+      GENERATE_STRUCTURES: "FALSE"
+      MODE: "creative"
+      FORCE_GAMEMODE: "TRUE"
+      SPAWN_PROTECTION: "0"
+      SPAWN_ANIMALS: "FALSE"
+      SPAWN_MONSTERS: "FALSE"
+    ports:
+      - "25566:25565"          # players connect here (distinct from mc's 25565)
+      - "8687:8686"            # earth sender <-> plugin socket (distinct from mc's 8686)
+    volumes:
+      - ./mc-earth/data:/data                # world + server files (separate dir)
+      - ./mc-earth/plugins:/plugins          # earth-built receiver plugin
+    tty: true
+    stdin_open: true
